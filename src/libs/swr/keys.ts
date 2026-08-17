@@ -696,6 +696,11 @@ export const knowledgeBaseKeys = {
 };
 
 // ---- device -------------------------------------------------------------
+export const trashKeys = {
+  countByType: def('trash:countByType', () => ['trash:countByType']),
+  list: def('trash:list', (resourceType?: string | null) => ['trash:list', resourceType ?? 'all']),
+};
+
 export const deviceKeys = {
   gitAheadBehind: def('device:gitAheadBehind', (deviceId: string, path: string) => [
     'device:gitAheadBehind',
@@ -1277,6 +1282,7 @@ export const swrKeys = {
   topic: topicKeys,
   topicComment: topicCommentKeys,
   topicAction: topicActionKeys,
+  trash: trashKeys,
   user: userKeys,
   userMemory: userMemoryKeys,
   verify: verifyKeys,

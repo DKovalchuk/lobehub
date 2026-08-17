@@ -6,7 +6,7 @@
   },
   "dialect": "postgresql",
   "enums": {},
-  "id": "9bf5fb1a-f8ab-4645-8726-6936bc4e8e5b",
+  "id": "01956ff0-abc0-41f9-b4ab-8e43a3f03e6f",
   "policies": {},
   "prevId": "311a56b9-41d5-4e3d-89f9-b22968e73bf8",
   "roles": {},
@@ -25698,8 +25698,8 @@
           "method": "btree",
           "with": {}
         },
-        "trash_items_scope_deleted_at_idx": {
-          "name": "trash_items_scope_deleted_at_idx",
+        "trash_items_personal_listing_idx": {
+          "name": "trash_items_personal_listing_idx",
           "columns": [
             {
               "expression": "user_id",
@@ -25707,6 +25707,22 @@
               "asc": true,
               "nulls": "last"
             },
+            {
+              "expression": "deleted_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"trash_items\".\"root_id\" IS NULL AND \"trash_items\".\"workspace_id\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "trash_items_workspace_listing_idx": {
+          "name": "trash_items_workspace_listing_idx",
+          "columns": [
             {
               "expression": "workspace_id",
               "isExpression": false,
@@ -25721,7 +25737,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"trash_items\".\"root_id\" IS NULL",
+          "where": "\"trash_items\".\"root_id\" IS NULL AND \"trash_items\".\"workspace_id\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}

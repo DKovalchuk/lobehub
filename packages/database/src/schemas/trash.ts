@@ -77,10 +77,15 @@ export const trashItems = pgTable(
   (t) => [
     // One registry row per trashed resource — the arbiter for "trash twice".
     uniqueIndex('trash_items_resource_unique').on(t.resourceType, t.resourceId),
-    // Recycle bin listing: newest first within a scope, roots only.
-    index('trash_items_scope_deleted_at_idx')
-      .on(t.userId, t.workspaceId, t.deletedAt)
-      .where(sql`${t.rootId} IS NULL`),
+    // Recycle bin listing: newest first within a scope, roots only. Personal
+    // mode filters `user_id = ? AND workspace_id IS NULL`, team mode filters
+    // `workspace_id = ?` alone — so each gets an index led by its own key.
+    index('trash_items_personal_listing_idx')
+      .on(t.userId, t.deletedAt)
+      .where(sql`${t.rootId} IS NULL AND ${t.workspaceId} IS NULL`),
+    index('trash_items_workspace_listing_idx')
+      .on(t.workspaceId, t.deletedAt)
+      .where(sql`${t.rootId} IS NULL AND ${t.workspaceId} IS NOT NULL`),
     // Purge sweep: expired roots.
     index('trash_items_expires_at_idx')
       .on(t.expiresAt)

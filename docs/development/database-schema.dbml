@@ -3034,7 +3034,8 @@ table trash_items {
 
   indexes {
     (resource_type, resource_id) [name: 'trash_items_resource_unique', unique]
-    (user_id, workspace_id, deleted_at) [name: 'trash_items_scope_deleted_at_idx']
+    (user_id, deleted_at) [name: 'trash_items_personal_listing_idx']
+    (workspace_id, deleted_at) [name: 'trash_items_workspace_listing_idx']
     expires_at [name: 'trash_items_expires_at_idx']
     root_id [name: 'trash_items_root_id_idx']
   }

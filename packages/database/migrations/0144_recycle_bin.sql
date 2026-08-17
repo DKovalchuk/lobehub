@@ -60,6 +60,7 @@ ALTER TABLE "trash_items" ADD CONSTRAINT "trash_items_workspace_id_workspaces_id
 ALTER TABLE "trash_items" DROP CONSTRAINT IF EXISTS "trash_items_deleted_by_user_id_users_id_fk";--> statement-breakpoint
 ALTER TABLE "trash_items" ADD CONSTRAINT "trash_items_deleted_by_user_id_users_id_fk" FOREIGN KEY ("deleted_by_user_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "trash_items_resource_unique" ON "trash_items" USING btree ("resource_type","resource_id");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "trash_items_scope_deleted_at_idx" ON "trash_items" USING btree ("user_id","workspace_id","deleted_at") WHERE "trash_items"."root_id" IS NULL;--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "trash_items_personal_listing_idx" ON "trash_items" USING btree ("user_id","deleted_at") WHERE "trash_items"."root_id" IS NULL AND "trash_items"."workspace_id" IS NULL;--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "trash_items_workspace_listing_idx" ON "trash_items" USING btree ("workspace_id","deleted_at") WHERE "trash_items"."root_id" IS NULL AND "trash_items"."workspace_id" IS NOT NULL;--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "trash_items_expires_at_idx" ON "trash_items" USING btree ("expires_at") WHERE "trash_items"."root_id" IS NULL;--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "trash_items_root_id_idx" ON "trash_items" USING btree ("root_id");

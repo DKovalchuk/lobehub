@@ -749,6 +749,51 @@ describe('HeterogeneousAgentService', () => {
       });
     });
 
+    it('snapshots hooks before the terminal event lets a renderer clear runningOperation', async () => {
+      const callOrder: string[] = [];
+      let metadata: Record<string, any> = {
+        runningOperation: { hooks: [taskHook], operationId: 'op-q' },
+      };
+      const topicModel = {
+        findById: vi.fn(async () => {
+          callOrder.push('find-topic');
+          return { id: 'topic-q', metadata };
+        }),
+        settleRunningStatus: vi.fn(async () => {}),
+        updateMetadata: vi.fn(async (_id: string, patch: Record<string, any>) => {
+          metadata = { ...metadata, ...patch };
+        }),
+      } as any;
+      const streamEventManager = {
+        publishStreamEvent: vi.fn(async () => {
+          callOrder.push('publish-terminal');
+          // Mirror onSessionComplete: the terminal event reaches the renderer,
+          // which clears this topic field before heteroFinish resumes.
+          metadata = { ...metadata, runningOperation: null };
+          return 'terminal-event';
+        }),
+      } as unknown as IStreamEventManager;
+      const service = new HeterogeneousAgentService({} as any, 'user-test', {
+        persistenceHandler: createFakePersistenceHandler(),
+        snapshotStore: null,
+        streamEventManager,
+        topicModel,
+      });
+
+      await service.heteroFinish({
+        agentType: 'claude-code',
+        operationId: 'op-q',
+        result: 'success',
+        topicId: 'topic-q',
+      });
+
+      expect(callOrder.slice(0, 2)).toEqual(['find-topic', 'publish-terminal']);
+      expect(mockPublishJSON).toHaveBeenCalledTimes(1);
+      expect(mockPublishJSON.mock.calls[0][0]).toMatchObject({
+        body: expect.objectContaining({ taskId: 'task_q', topicId: 'topic-q' }),
+      });
+    });
+
     it('negative control: delivers nothing when runningOperation.hooks is empty', async () => {
       const { service } = makeService([]);
 

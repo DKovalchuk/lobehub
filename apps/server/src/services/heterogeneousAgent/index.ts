@@ -282,6 +282,32 @@ export class HeterogeneousAgentService {
       topicId,
     });
 
+    // Snapshot the durable terminal context BEFORE publishing agent_runtime_end.
+    // Renderer subscribers may clear runningOperation as soon as they receive
+    // that event. In queue mode those serialized hooks are the only cross-process
+    // source for task / IM completion callbacks, so reading them after publish
+    // races with the renderer and can strand task_topics at `running` forever.
+    let serializedHooks: SerializedHook[] | undefined;
+    let assistantMessageId: string | undefined;
+    let isolationThreadId: string | undefined;
+    if (result !== 'cancelled') {
+      try {
+        const topic = await this.topicModel.findById(topicId);
+        serializedHooks = topic?.metadata?.runningOperation?.hooks as SerializedHook[] | undefined;
+        isolationThreadId = topic?.metadata?.runningOperation?.threadId ?? undefined;
+        // Prefer heteroCurrentMsgId — the persistence handler updates this pointer
+        // on every step boundary, so it refers to the LAST assistant message with
+        // the complete final content. Fall back to the initial placeholder id.
+        const currentMsgRef = topic?.metadata?.heteroCurrentMsgId;
+        assistantMessageId =
+          currentMsgRef?.operationId === operationId
+            ? currentMsgRef.msgId
+            : topic?.metadata?.runningOperation?.assistantMessageId;
+      } catch (err) {
+        log('heteroFinish: failed to snapshot runningOperation (non-fatal): %O', err);
+      }
+    }
+
     // Always emit a terminal `agent_runtime_end` so renderer subscribers shut
     // down even if the CLI stream missed it (process killed mid-flight,
     // network drop on last batch). Idempotent on the renderer side: the
@@ -314,23 +340,7 @@ export class HeterogeneousAgentService {
     // result lands.)
     if (result === 'cancelled') return;
 
-    let serializedHooks: SerializedHook[] | undefined;
-    let assistantMessageId: string | undefined;
-    let isolationThreadId: string | undefined;
     try {
-      const topic = await this.topicModel.findById(topicId);
-      serializedHooks = topic?.metadata?.runningOperation?.hooks as SerializedHook[] | undefined;
-      isolationThreadId = topic?.metadata?.runningOperation?.threadId ?? undefined;
-      // Prefer heteroCurrentMsgId — the persistence handler updates this pointer
-      // on every step boundary, so it refers to the LAST assistant message with
-      // the complete final content.  Fall back to the initial placeholder id
-      // recorded in runningOperation if the pointer is absent or belongs to a
-      // different operation (shouldn't happen, but defensive).
-      const currentMsgRef = topic?.metadata?.heteroCurrentMsgId;
-      assistantMessageId =
-        currentMsgRef?.operationId === operationId
-          ? currentMsgRef.msgId
-          : topic?.metadata?.runningOperation?.assistantMessageId;
       await this.topicModel.updateMetadata(topicId, { runningOperation: null });
       // Settle `status: 'running'` for runs with no renderer attached (e.g. a
       // cron-dispatched scheduled resume) — otherwise nothing ever moves the

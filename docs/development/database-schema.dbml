@@ -2231,14 +2231,34 @@ table projects {
   }
 }
 
+table push_live_activities {
+  id uuid [pk, not null, default: `gen_random_uuid()`]
+  user_id text [not null]
+  device_id text [not null]
+  operation_id text [not null]
+  activity_id text [not null]
+  push_token text [not null]
+  apns_environment text [not null]
+  created_at "timestamp with time zone" [not null, default: `now()`]
+  last_seen_at "timestamp with time zone" [not null, default: `now()`]
+
+  indexes {
+    (user_id, device_id, operation_id) [name: 'idx_push_live_activities_user_device_operation', unique]
+    (user_id, operation_id) [name: 'idx_push_live_activities_user_operation']
+    last_seen_at [name: 'idx_push_live_activities_last_seen']
+  }
+}
+
 table push_tokens {
   id uuid [pk, not null, default: `gen_random_uuid()`]
   user_id text [not null]
   expo_token text [not null]
   device_id text [not null]
   platform text [not null]
+  apns_environment text
   app_version text
   locale text
+  live_activity_push_to_start_token text
   created_at "timestamp with time zone" [not null, default: `now()`]
   last_seen_at "timestamp with time zone" [not null, default: `now()`]
 

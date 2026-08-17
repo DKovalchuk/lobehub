@@ -43,6 +43,7 @@ import {
   assertCanPerformResourceAction,
   buildResourcePermissionState,
 } from '@/server/services/resourcePermission';
+import { TrashService } from '@/server/services/trash';
 import {
   hasWorkspaceScopedPermission,
   isWorkspacePrimaryOwner,
@@ -781,7 +782,13 @@ export const agentRouter = router({
       }
       let result;
       try {
-        result = await ctx.agentModel.delete(input.agentId);
+        // Recycle bin: the agent, its session shells and every topic under it
+        // are stamped, not dropped — the FK cascade only runs at purge time.
+        result = await new TrashService(
+          ctx.serverDB,
+          ctx.userId,
+          ctx.workspaceId ?? undefined,
+        ).trashAgent(input.agentId);
       } catch (error) {
         if (error instanceof Error && error.message === AGENT_COPY_IN_PROGRESS) {
           throw new TRPCError({
@@ -801,12 +808,9 @@ export const agentRouter = router({
         }
         throw error;
       }
-      if (ctx.workspaceId) {
-        await new ResourcePermissionModel(ctx.serverDB, ctx.workspaceId).removeAll(
-          'agent',
-          input.agentId,
-        );
-      }
+      // Sharing grants are left in place while the agent sits in the bin (the
+      // row is invisible anyway) so a restore brings them back; the purge
+      // handler removes them for good.
       return result;
     }),
 

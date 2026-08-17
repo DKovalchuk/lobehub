@@ -19,7 +19,7 @@ import { createInsertSchema } from 'drizzle-zod';
 import { z } from 'zod';
 
 import { idGenerator, randomSlug } from '../utils/idGenerator';
-import { timestamps } from './_helpers';
+import { softDeleteColumns, timestamps } from './_helpers';
 import { files, knowledgeBases } from './file';
 import { sessionGroups } from './session';
 import { users } from './user';
@@ -90,6 +90,8 @@ export const agents = pgTable(
      */
     visibility: text('visibility', { enum: AGENT_VISIBILITY }).default('public').notNull(),
 
+    /** Recycle bin — see `schemas/trash.ts`. */
+    ...softDeleteColumns(),
     ...timestamps,
   },
   (t) => [

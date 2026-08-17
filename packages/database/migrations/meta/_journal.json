@@ -1008,6 +1008,13 @@
       "when": 1786847279485,
       "tag": "0143_resource_transfer_requests",
       "breakpoints": true
+    },
+    {
+      "idx": 144,
+      "version": "7",
+      "when": 1786941744794,
+      "tag": "0144_recycle_bin",
+      "breakpoints": true
     }
   ],
   "version": "6"

@@ -326,6 +326,7 @@ export class KnowledgeBaseModel {
               inArray(files.id, linkedFileIds),
               eq(files.userId, this.userId),
               buildWorkspaceWhere(creatorScope, {
+                isDeleted: files.isDeleted,
                 userId: files.userId,
                 workspaceId: files.workspaceId,
               }),
@@ -346,6 +347,7 @@ export class KnowledgeBaseModel {
             documentLink,
             eq(documents.userId, this.userId),
             buildWorkspaceWhere(creatorScope, {
+              isDeleted: documents.isDeleted,
               userId: documents.userId,
               workspaceId: documents.workspaceId,
             }),

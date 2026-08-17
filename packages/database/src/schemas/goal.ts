@@ -2,7 +2,7 @@ import { goalStatuses, goalSubjectTypes } from '@lobechat/const/goal';
 import { index, integer, pgTable, text } from 'drizzle-orm/pg-core';
 
 import { idGenerator } from '../utils/idGenerator';
-import { amountNumeric, createdAt, timestamptz, updatedAt } from './_helpers';
+import { amountNumeric, createdAt, softDeleteColumns, timestamptz, updatedAt } from './_helpers';
 import { agents } from './agent';
 import { projects } from './project';
 import { users } from './user';
@@ -56,6 +56,8 @@ export const goals = pgTable(
 
     startedAt: timestamptz('started_at'),
     completedAt: timestamptz('completed_at'),
+    /** Recycle bin — see `schemas/trash.ts`. */
+    ...softDeleteColumns(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

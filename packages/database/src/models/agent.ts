@@ -57,6 +57,7 @@ import type { LobeChatDatabase, Transaction } from '../type';
 import { genEndDateWhere, genRangeWhere, genStartDateWhere, genWhere } from '../utils/genWhere';
 import { resolveGroupMembershipType } from '../utils/groupMembership';
 import { normalizeInboxAgentMeta } from '../utils/inboxAgent';
+import { notTrashed } from '../utils/softDelete';
 import { buildWorkspacePayload, buildWorkspaceWhere } from '../utils/workspace';
 import { AGENT_COPY_IN_PROGRESS, AgentCopyJobModel } from './agentCopyJob';
 import {
@@ -227,7 +228,7 @@ export class AgentModel {
         title: agents.title,
       })
       .from(agents)
-      .leftJoin(topics, eq(topics.agentId, agents.id))
+      .leftJoin(topics, and(eq(topics.agentId, agents.id), notTrashed(topics.isDeleted)))
       .where(and(this.ownership(), or(eq(agents.slug, INBOX_SESSION_ID), ne(agents.virtual, true))))
       .groupBy(agents.id)
       .having(({ count }) => gt(count, 0))
@@ -248,6 +249,7 @@ export class AgentModel {
     buildWorkspaceWhere(
       { userId: this.userId, workspaceId: this.workspaceId },
       {
+        isDeleted: agents.isDeleted,
         userId: agents.userId,
         workspaceId: agents.workspaceId,
         visibility: agents.visibility,
@@ -1512,6 +1514,7 @@ export class AgentModel {
           buildWorkspaceWhere(
             { userId: this.userId, workspaceId: this.workspaceId },
             {
+              isDeleted: sessionGroups.isDeleted,
               userId: sessionGroups.userId,
               visibility: sessionGroups.visibility,
               workspaceId: sessionGroups.workspaceId,
@@ -1922,6 +1925,7 @@ export class AgentModel {
         visible: sql<boolean>`(${buildWorkspaceWhere(
           { userId: this.userId, workspaceId: this.workspaceId },
           {
+            isDeleted: chatGroups.isDeleted,
             userId: chatGroups.userId,
             visibility: chatGroups.visibility,
             workspaceId: chatGroups.workspaceId,

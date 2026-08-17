@@ -48,6 +48,7 @@ export * from './task';
 export * from './tool';
 export * from './topic';
 export * from './topicComment';
+export * from './trash';
 export * from './understanding';
 export * from './user';
 export * from './userMemory';

@@ -5,7 +5,7 @@ import type {
   LobeAgentSession,
   LobeGroupSession,
 } from '@lobechat/types';
-import { and, asc, count, desc, eq, inArray, not, or, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, not, notExists, or, sql } from 'drizzle-orm';
 import type { PartialDeep } from 'type-fest';
 
 import { merge } from '@/utils/merge';
@@ -16,8 +16,14 @@ import type { LobeChatDatabase } from '../type';
 import { sanitizeBm25Query } from '../utils/bm25';
 import { genEndDateWhere, genRangeWhere, genStartDateWhere, genWhere } from '../utils/genWhere';
 import { idGenerator } from '../utils/idGenerator';
+import { isTrashed } from '../utils/softDelete';
 import { buildWorkspacePayload, buildWorkspaceWhere } from '../utils/workspace';
 
+/**
+ * @deprecated Sessions are the legacy shell of an agent — see the `sessions`
+ * schema note. Reads here still exist for the mobile session list and legacy
+ * data; write paths should go through `AgentModel` / `TopicModel`.
+ */
 export class SessionModel {
   private userId: string;
   private db: LobeChatDatabase;
@@ -31,6 +37,20 @@ export class SessionModel {
 
   private ownership = () =>
     buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, sessions);
+
+  /**
+   * Sessions carry no recycle-bin flag of their own (the agent is the
+   * restorable unit), so the legacy list has to hide shells whose agent sits
+   * in the bin explicitly.
+   */
+  private agentNotTrashed = () =>
+    notExists(
+      this.db
+        .select({ id: agentsToSessions.agentId })
+        .from(agentsToSessions)
+        .innerJoin(agents, eq(agentsToSessions.agentId, agents.id))
+        .where(and(eq(agentsToSessions.sessionId, sessions.id), isTrashed(agents.isDeleted))),
+    );
 
   private agentsOwnership = () =>
     buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, agents);
@@ -56,7 +76,9 @@ export class SessionModel {
       .leftJoin(agentsToSessions, eq(sessions.id, agentsToSessions.sessionId))
       .leftJoin(agents, eq(agentsToSessions.agentId, agents.id))
       .leftJoin(sessionGroups, eq(sessions.groupId, sessionGroups.id))
-      .where(and(this.ownership(), not(eq(sessions.slug, INBOX_SESSION_ID))))
+      .where(
+        and(this.ownership(), not(eq(sessions.slug, INBOX_SESSION_ID)), this.agentNotTrashed()),
+      )
       .orderBy(desc(sessions.updatedAt))
       .limit(pageSize)
       .offset(offset);
@@ -88,7 +110,10 @@ export class SessionModel {
 
     const groups = await this.db.query.sessionGroups.findMany({
       orderBy: [asc(sessionGroups.sort), desc(sessionGroups.createdAt)],
-      where: and(this.ownership()),
+      where: buildWorkspaceWhere(
+        { userId: this.userId, workspaceId: this.workspaceId },
+        sessionGroups,
+      ),
     });
 
     const mappedSessions = result.map((item) => this.mapSessionItem(item as any));
@@ -429,6 +454,15 @@ export class SessionModel {
       await trx.delete(agents).where(this.agentsOwnership());
       return trx.delete(sessions).where(this.ownership());
     });
+  };
+
+  /** Agents linked to a session — lets `removeSession` route through the agent trash handler. */
+  findLinkedAgentIds = async (sessionId: string): Promise<string[]> => {
+    const links = await this.db
+      .select({ agentId: agentsToSessions.agentId })
+      .from(agentsToSessions)
+      .where(and(eq(agentsToSessions.sessionId, sessionId), this.agentsToSessionsOwnership()));
+    return links.map((link) => link.agentId);
   };
 
   clearOrphanAgent = async (agentIds: string[], trx: any): Promise<string[]> => {

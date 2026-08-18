@@ -754,10 +754,7 @@ describe('HeterogeneousAgentService', () => {
         runningOperation: { assistantMessageId: 'asst-q', hooks: [taskHook], operationId: 'op-q' },
       };
       const topicModel = {
-        findById: vi.fn(async () => {
-          callOrder.push('find-topic');
-          return { id: 'topic-q', metadata };
-        }),
+        findById: vi.fn(async () => ({ id: 'topic-q', metadata })),
         settleRunningStatus: vi.fn(async () => {}),
         updateMetadata: vi.fn(async (_id: string, patch: Record<string, any>) => {
           metadata = { ...metadata, ...patch };

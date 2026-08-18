@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { CompletionLifecycle } from '@/server/services/agentRuntime/CompletionLifecycle';
+
 import { AiAgentService } from '../index';
 
 const {
@@ -840,15 +842,8 @@ describe('AiAgentService.execAgent - hetero early-exit file attachments', () => 
     });
   });
 
-  // The seed side of the hetero terminal-hook funnel. execAgent runs the hetero
-  // block inline (process A) and serializes the run's lifecycle hooks onto
-  // `topic.metadata.runningOperation.hooks` BEFORE the device/sandbox fork, so
-  // the later heteroFinish callback (process B) can re-fire them across the
-  // process boundary. If this seed drops the task-on-complete webhook, a finished
-  // hetero task's `task_topics.status` stays stuck at `running` because
-  // `onTopicComplete` never gets delivered. Guards that the passed hooks reach
-  // runningOperation.hooks in serialized (webhook-only) form on BOTH dispatch
-  // targets.
+  // The seed side of the hetero terminal-hook funnel. The operation row owns the
+  // durable webhook config; runningOperation mirrors it for UI/reconnect paths.
   describe('terminal hook seeding onto runningOperation (regression guard)', () => {
     const taskHook = {
       handler: async () => {},
@@ -868,6 +863,10 @@ describe('AiAgentService.execAgent - hetero early-exit file attachments', () => 
         .find((patch: any) => patch?.runningOperation?.operationId);
 
     it('serializes the onComplete webhook hook onto runningOperation (sandbox dispatch)', async () => {
+      const recordStart = vi
+        .spyOn(CompletionLifecycle.prototype, 'recordStart')
+        .mockResolvedValue(undefined);
+
       await service.execAgent({
         agentId: 'agent-1',
         hooks: [taskHook],
@@ -892,6 +891,15 @@ describe('AiAgentService.execAgent - hetero early-exit file attachments', () => 
       // The non-serializable handler must be stripped (only webhook crosses the
       // process boundary).
       expect(seed.runningOperation.hooks[0]).not.toHaveProperty('handler');
+      expect(recordStart).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: {
+            _hooks: seed.runningOperation.hooks,
+            assistantMessageId: seed.runningOperation.assistantMessageId,
+          },
+        }),
+      );
+      recordStart.mockRestore();
     });
 
     it('serializes the onComplete webhook hook onto runningOperation (device dispatch)', async () => {

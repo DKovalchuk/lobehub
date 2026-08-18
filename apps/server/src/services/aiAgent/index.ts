@@ -2250,6 +2250,12 @@ export class AiAgentService {
       // so hetero ops aren't visually distinct bare nanoids in the trace/op tables.
       const operationId = `op_${Date.now()}_${resolvedAgentId}_${topicId}_${nanoid(8)}`;
 
+      // Heterogeneous execution returns before AgentRuntimeService registers
+      // lifecycle hooks. Register them here and persist their webhook-only form
+      // on the operation row below, which is the durable owner of run state.
+      if (hooks?.length) hookDispatcher.register(operationId, hooks);
+      const serializedHooks = hookDispatcher.getSerializedHooks(operationId);
+
       // Persist a first-class agent_operations row for the hetero run. The id is
       // generated here (authoritative) and flows through to heteroIngest /
       // heteroFinish unchanged. Without this row the run is invisible to the
@@ -2270,6 +2276,10 @@ export class AiAgentService {
           agentId: persistAgentId,
           chatGroupId: appContext?.groupId ?? null,
           maxSteps,
+          metadata: {
+            _hooks: serializedHooks,
+            assistantMessageId: assistantMessageRecord.id,
+          },
           // Seed the heterogeneous provider (claude-code / codex / …), NOT the
           // agent's configured chat provider — the run executes on the CLI, so
           // `provider` (e.g. `lobehub`) and `model` (e.g. `deepseek-v4-pro`) are
@@ -2432,16 +2442,6 @@ export class AiAgentService {
       const remoteDeviceUserId = usesCallersPersonalDevice
         ? this.userId
         : (agentConfig.userId ?? this.userId);
-
-      // Register the run's lifecycle hooks so the hetero terminal path fires
-      // onComplete/onError through the same `hookDispatcher` the normal LLM
-      // runtime uses — driving the task lifecycle (onTopicComplete) and IM bot
-      // completion callbacks uniformly. The hetero block returns before
-      // AgentRuntimeService (which registers hooks for normal runs), so we do it
-      // here. Local mode dispatches these in-memory handlers; queue mode
-      // delivers the serialized webhooks persisted on runningOperation below.
-      if (hooks?.length) hookDispatcher.register(operationId, hooks);
-      const serializedHooks = hookDispatcher.getSerializedHooks(operationId);
 
       // Seed topic.metadata.runningOperation so heteroIngest can validate the
       // operation, and so every terminal site (heteroFinish, agentNotify done,

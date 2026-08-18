@@ -184,20 +184,6 @@ export interface ChatTopicMetadata {
    * (message counts are not comparable across transcript records and DB rows).
    */
   heteroSourceEndAt?: string;
-  /**
-   * Durable handoff for heterogeneous terminal callbacks.
-   *
-   * The producer can send an in-stream `agent_runtime_end` before its separate
-   * finish request. Renderers clear `runningOperation` on that first event, so
-   * the server snapshots the cross-process callback context here before
-   * publishing it. `heteroFinish` consumes and clears the matching snapshot.
-   */
-  heteroTerminalContext?: {
-    assistantMessageId?: string;
-    hooks?: SerializedAgentHook[];
-    operationId: string;
-    threadId?: string | null;
-  } | null;
   /** origin marker for imported topics, e.g. `claude-code-local` / `codex-local` */
   importedFrom?: string;
   /**

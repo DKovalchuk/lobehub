@@ -212,27 +212,6 @@ export class HeterogeneousAgentService {
       );
     }
 
-    // The CLI drains and waits for this batch before calling heteroFinish. A
-    // renderer can therefore consume an in-stream terminal event and clear
-    // runningOperation before the finish request reaches another Lambda. Copy
-    // the callback context to a separate durable field before the FIRST terminal
-    // publish; the renderer only owns runningOperation and cannot erase this
-    // server-side handoff.
-    if (unpublished.some((event) => event.type === 'agent_runtime_end')) {
-      const topic = await this.topicModel.findById(topicId);
-      const runningOperation = topic?.metadata?.runningOperation;
-      if (runningOperation?.operationId === operationId) {
-        await this.topicModel.updateMetadata(topicId, {
-          heteroTerminalContext: {
-            assistantMessageId: runningOperation.assistantMessageId,
-            hooks: runningOperation.hooks,
-            operationId,
-            threadId: runningOperation.threadId,
-          },
-        });
-      }
-    }
-
     for (const event of unpublished) {
       // Each event already carries operationId; pass through unchanged so the
       // wire shape on the WS side is identical to gateway-driven runs.
@@ -304,34 +283,42 @@ export class HeterogeneousAgentService {
       topicId,
     });
 
-    // Prefer runningOperation while it still exists, then fall back to the
-    // durable snapshot captured by heteroIngest before the first terminal event.
-    // Queue-mode hooks have no in-memory fallback across these requests.
+    // The operation row is the durable owner of lifecycle hooks. The renderer
+    // may already have cleared topic.runningOperation after an earlier in-stream
+    // terminal event, while agent_operations remains available across Lambdas.
     let serializedHooks: SerializedHook[] | undefined;
     let assistantMessageId: string | undefined;
     let isolationThreadId: string | undefined;
     if (result !== 'cancelled') {
+      let operation: Awaited<ReturnType<AgentOperationModel['findById']>> | undefined;
       try {
-        const topic = await this.topicModel.findById(topicId);
-        const runningOperation = topic?.metadata?.runningOperation;
-        const terminalContext =
-          topic?.metadata?.heteroTerminalContext?.operationId === operationId
-            ? topic.metadata.heteroTerminalContext
-            : undefined;
-        serializedHooks = (runningOperation?.hooks ?? terminalContext?.hooks) as
-          SerializedHook[] | undefined;
-        isolationThreadId = runningOperation?.threadId ?? terminalContext?.threadId ?? undefined;
-        // Prefer heteroCurrentMsgId — the persistence handler updates this pointer
-        // on every step boundary, so it refers to the LAST assistant message with
-        // the complete final content. Fall back to the initial placeholder id.
-        const currentMsgRef = topic?.metadata?.heteroCurrentMsgId;
-        assistantMessageId =
-          currentMsgRef?.operationId === operationId
-            ? currentMsgRef.msgId
-            : (runningOperation?.assistantMessageId ?? terminalContext?.assistantMessageId);
+        operation = await new AgentOperationModel(this.db, this.userId, this.workspaceId).findById(
+          operationId,
+        );
       } catch (err) {
-        log('heteroFinish: failed to snapshot runningOperation (non-fatal): %O', err);
+        log('heteroFinish: failed to read operation context (non-fatal): %O', err);
       }
+
+      let topic: Awaited<ReturnType<TopicModel['findById']>> | undefined;
+      try {
+        topic = await this.topicModel.findById(topicId);
+      } catch (err) {
+        log('heteroFinish: failed to read topic context (non-fatal): %O', err);
+      }
+
+      const runningOperation = topic?.metadata?.runningOperation;
+      serializedHooks = (operation?.metadata?._hooks ?? runningOperation?.hooks) as
+        SerializedHook[] | undefined;
+      isolationThreadId = operation?.threadId ?? runningOperation?.threadId ?? undefined;
+      // Prefer heteroCurrentMsgId — the persistence handler updates this pointer
+      // on every step boundary, so it refers to the LAST assistant message with
+      // the complete final content. Fall back to the operation's initial pointer.
+      const currentMsgRef = topic?.metadata?.heteroCurrentMsgId;
+      assistantMessageId =
+        currentMsgRef?.operationId === operationId
+          ? currentMsgRef.msgId
+          : ((operation?.metadata?.assistantMessageId as string | undefined) ??
+            runningOperation?.assistantMessageId);
     }
 
     // Always emit a terminal `agent_runtime_end` so renderer subscribers shut
@@ -531,11 +518,6 @@ export class HeterogeneousAgentService {
       },
       completionReason,
     );
-    try {
-      await this.topicModel.updateMetadata(topicId, { heteroTerminalContext: null });
-    } catch (err) {
-      log('heteroFinish: failed to clear terminal context (non-fatal): %O', err);
-    }
     log('heteroFinish: dispatched completion lifecycle for op=%s result=%s', operationId, result);
   }
 

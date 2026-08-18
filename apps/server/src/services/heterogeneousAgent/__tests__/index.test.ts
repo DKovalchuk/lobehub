@@ -79,15 +79,9 @@ const buildEvent = (
 const createService = (overrides: { streamEventManager?: IStreamEventManager } = {}) => {
   const { manager, published } = createFakeStreamManager();
   const persistenceHandler = createFakePersistenceHandler();
-  const topicModel = {
-    findById: vi.fn(async () => undefined),
-    settleRunningStatus: vi.fn(async () => {}),
-    updateMetadata: vi.fn(async () => {}),
-  } as any;
   const service = new HeterogeneousAgentService({} as any, 'user-test', {
     persistenceHandler,
     streamEventManager: overrides.streamEventManager ?? manager,
-    topicModel,
   });
   return { manager, persistenceHandler, published, service };
 };
@@ -267,10 +261,6 @@ describe('HeterogeneousAgentService', () => {
       const service = new HeterogeneousAgentService({} as any, 'user-test', {
         persistenceHandler,
         streamEventManager: manager as IStreamEventManager,
-        topicModel: {
-          findById: vi.fn(async () => undefined),
-          updateMetadata: vi.fn(async () => {}),
-        } as any,
       });
       const events: AgentStreamEvent[] = [
         buildEvent('stream_start', 0, { assistantMessage: { id: 'asst-1' } }),
@@ -759,8 +749,7 @@ describe('HeterogeneousAgentService', () => {
       });
     });
 
-    it('persists hooks before an ingested terminal event clears runningOperation', async () => {
-      const callOrder: string[] = [];
+    it('restores hooks from the operation after an ingested terminal event clears the topic', async () => {
       let metadata: Record<string, any> = {
         runningOperation: { assistantMessageId: 'asst-q', hooks: [taskHook], operationId: 'op-q' },
       };
@@ -776,7 +765,6 @@ describe('HeterogeneousAgentService', () => {
       } as any;
       const streamEventManager = {
         publishStreamEvent: vi.fn(async () => {
-          callOrder.push('publish-terminal');
           // Mirror onSessionComplete: the terminal event reaches the renderer,
           // which clears this topic field before heteroFinish resumes.
           metadata = { ...metadata, runningOperation: null };
@@ -789,6 +777,11 @@ describe('HeterogeneousAgentService', () => {
         streamEventManager,
         topicModel,
       });
+      const operationFind = vi.spyOn(AgentOperationModel.prototype, 'findById').mockResolvedValue({
+        id: 'op-q',
+        metadata: { _hooks: [taskHook], assistantMessageId: 'asst-q' },
+        threadId: null,
+      } as any);
       const finishService = new HeterogeneousAgentService({} as any, 'user-test', {
         persistenceHandler: createFakePersistenceHandler(),
         snapshotStore: null,
@@ -805,12 +798,8 @@ describe('HeterogeneousAgentService', () => {
       });
 
       expect(metadata.runningOperation).toBeNull();
-      expect(metadata.heteroTerminalContext).toMatchObject({
-        hooks: [taskHook],
-        operationId: 'op-q',
-      });
 
-      // Request 2 can land on another Lambda and must use the durable snapshot.
+      // Request 2 can land on another Lambda and must use the durable op state.
       await finishService.heteroFinish({
         agentType: 'claude-code',
         operationId: 'op-q',
@@ -818,12 +807,12 @@ describe('HeterogeneousAgentService', () => {
         topicId: 'topic-q',
       });
 
-      expect(callOrder.slice(0, 2)).toEqual(['find-topic', 'publish-terminal']);
+      expect(operationFind).toHaveBeenCalledWith('op-q');
       expect(mockPublishJSON).toHaveBeenCalledTimes(1);
       expect(mockPublishJSON.mock.calls[0][0]).toMatchObject({
         body: expect.objectContaining({ taskId: 'task_q', topicId: 'topic-q' }),
       });
-      expect(metadata.heteroTerminalContext).toBeNull();
+      operationFind.mockRestore();
     });
 
     it('negative control: delivers nothing when runningOperation.hooks is empty', async () => {

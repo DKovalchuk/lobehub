@@ -79,9 +79,15 @@ const buildEvent = (
 const createService = (overrides: { streamEventManager?: IStreamEventManager } = {}) => {
   const { manager, published } = createFakeStreamManager();
   const persistenceHandler = createFakePersistenceHandler();
+  const topicModel = {
+    findById: vi.fn(async () => undefined),
+    settleRunningStatus: vi.fn(async () => {}),
+    updateMetadata: vi.fn(async () => {}),
+  } as any;
   const service = new HeterogeneousAgentService({} as any, 'user-test', {
     persistenceHandler,
     streamEventManager: overrides.streamEventManager ?? manager,
+    topicModel,
   });
   return { manager, persistenceHandler, published, service };
 };
@@ -261,6 +267,10 @@ describe('HeterogeneousAgentService', () => {
       const service = new HeterogeneousAgentService({} as any, 'user-test', {
         persistenceHandler,
         streamEventManager: manager as IStreamEventManager,
+        topicModel: {
+          findById: vi.fn(async () => undefined),
+          updateMetadata: vi.fn(async () => {}),
+        } as any,
       });
       const events: AgentStreamEvent[] = [
         buildEvent('stream_start', 0, { assistantMessage: { id: 'asst-1' } }),
@@ -749,10 +759,10 @@ describe('HeterogeneousAgentService', () => {
       });
     });
 
-    it('snapshots hooks before the terminal event lets a renderer clear runningOperation', async () => {
+    it('persists hooks before an ingested terminal event clears runningOperation', async () => {
       const callOrder: string[] = [];
       let metadata: Record<string, any> = {
-        runningOperation: { hooks: [taskHook], operationId: 'op-q' },
+        runningOperation: { assistantMessageId: 'asst-q', hooks: [taskHook], operationId: 'op-q' },
       };
       const topicModel = {
         findById: vi.fn(async () => {
@@ -773,14 +783,35 @@ describe('HeterogeneousAgentService', () => {
           return 'terminal-event';
         }),
       } as unknown as IStreamEventManager;
-      const service = new HeterogeneousAgentService({} as any, 'user-test', {
+      const ingestService = new HeterogeneousAgentService({} as any, 'user-test', {
+        persistenceHandler: createFakePersistenceHandler(),
+        snapshotStore: null,
+        streamEventManager,
+        topicModel,
+      });
+      const finishService = new HeterogeneousAgentService({} as any, 'user-test', {
         persistenceHandler: createFakePersistenceHandler(),
         snapshotStore: null,
         streamEventManager,
         topicModel,
       });
 
-      await service.heteroFinish({
+      // Request 1: the CLI sends and waits for its in-stream terminal event.
+      await ingestService.heteroIngest({
+        agentType: 'claude-code',
+        events: [buildEvent('agent_runtime_end', 1)],
+        operationId: 'op-q',
+        topicId: 'topic-q',
+      });
+
+      expect(metadata.runningOperation).toBeNull();
+      expect(metadata.heteroTerminalContext).toMatchObject({
+        hooks: [taskHook],
+        operationId: 'op-q',
+      });
+
+      // Request 2 can land on another Lambda and must use the durable snapshot.
+      await finishService.heteroFinish({
         agentType: 'claude-code',
         operationId: 'op-q',
         result: 'success',
@@ -792,6 +823,7 @@ describe('HeterogeneousAgentService', () => {
       expect(mockPublishJSON.mock.calls[0][0]).toMatchObject({
         body: expect.objectContaining({ taskId: 'task_q', topicId: 'topic-q' }),
       });
+      expect(metadata.heteroTerminalContext).toBeNull();
     });
 
     it('negative control: delivers nothing when runningOperation.hooks is empty', async () => {

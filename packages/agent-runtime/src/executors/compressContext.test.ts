@@ -280,6 +280,59 @@ describe('compressContext executor', () => {
     ]);
   });
 
+  // Server runs rehydrate `state.messages` through conversation-flow, so a tool
+  // chain arrives as ONE virtual `assistantGroup` whose id is only its first
+  // assistant, while this executor filters raw DB rows. Without expanding the
+  // folded child ids, the child assistants and tool rows are compressed away
+  // and the preserved round is gutted — the opposite of what the tail is for.
+  it('protects folded assistantGroup children from the compression group', async () => {
+    const foldedGroup = {
+      children: [
+        {
+          content: '',
+          id: 'msg-a1',
+          tools: [{ id: 'call-1', result_msg_id: 'msg-t1', result: { id: 'msg-t1' } }],
+        },
+        { content: 'now editing', id: 'msg-a2' },
+      ],
+      content: '',
+      // The wrapper inherits the FIRST assistant's id.
+      id: 'msg-a1',
+      role: 'assistantGroup',
+    };
+    const rawRows = [
+      { content: 'history', id: 'msg-history', role: 'user' },
+      { content: '', id: 'msg-a1', role: 'assistant' },
+      { content: 'file contents', id: 'msg-t1', role: 'tool', tool_call_id: 'call-1' },
+      { content: 'now editing', id: 'msg-a2', role: 'assistant' },
+    ];
+
+    messagesQuery.mockResolvedValue(rawRows);
+    compressionCreateGroup.mockResolvedValue({
+      messageGroupId: 'group-123',
+      messagesToSummarize: [rawRows[0]],
+    });
+    llmStream.mockResolvedValue({ content: 'summary' });
+    compressionFinalizeGroup.mockResolvedValue({
+      messages: [
+        { content: 'summary', id: 'group-123', role: 'compressedGroup' },
+        ...rawRows.slice(1),
+      ],
+    });
+
+    const state = createState({
+      messages: [{ content: 'history', id: 'msg-history', role: 'user' }, foldedGroup] as any,
+    });
+    const result = await compressContext(host)(createInstruction(state.messages, 8_000), state);
+
+    // msg-a1 / msg-t1 / msg-a2 all belong to the preserved round.
+    expect(compressionCreateGroup).toHaveBeenCalledWith(
+      expect.objectContaining({ messageIds: ['msg-history'] }),
+    );
+    const compressed = (result.nextContext?.payload as any).compressedMessages;
+    expect(compressed.map((m: any) => m.id)).toEqual(['group-123', 'msg-a1', 'msg-t1', 'msg-a2']);
+  });
+
   it('skips without compression side effects when topic context is missing', async () => {
     const state = createState({
       metadata: { agentId: 'agent-123' },

@@ -2,6 +2,7 @@ import type { UIChatMessage } from '@lobechat/types';
 import { describe, expect, it } from 'vitest';
 
 import {
+  collectPreservedMessageIds,
   DEFAULT_TAIL_PRESERVE_RATIO,
   getTailPreserveBudget,
   MAX_TAIL_PRESERVE_TOKENS,
@@ -122,5 +123,67 @@ describe('selectPreservedTail', () => {
     const tail = selectPreservedTail(messages, 2_000);
 
     expect(messages.slice(messages.length - tail.length)).toEqual(tail);
+  });
+});
+
+describe('collectPreservedMessageIds', () => {
+  it('should collect plain message ids', () => {
+    const ids = collectPreservedMessageIds([mkMsg('a', 'user'), mkMsg('b', 'assistant')]);
+
+    expect([...ids].sort()).toEqual(['a', 'b']);
+  });
+
+  // The compression executor filters raw DB rows, but the server hands it a
+  // conversation-flow projection where a whole tool chain is one wrapper whose
+  // id is only its first assistant.
+  it('should expand folded assistantGroup children and their tool rows', () => {
+    const folded = {
+      children: [
+        { content: '', id: 'msg-a1', tools: [{ id: 'call-1', result_msg_id: 'msg-t1' }] },
+        { content: '', id: 'msg-a2', tools: [{ id: 'call-2', result_msg_id: 'msg-t2' }] },
+      ],
+      content: '',
+      id: 'msg-a1',
+      role: 'assistantGroup',
+    } as unknown as UIChatMessage;
+
+    const ids = collectPreservedMessageIds([folded]);
+
+    expect([...ids].sort()).toEqual(['msg-a1', 'msg-a2', 'msg-t1', 'msg-t2']);
+  });
+
+  it('should expand supervisor, agentCouncil, tasks and compare containers', () => {
+    const messages = [
+      { children: [{ id: 'sup-child' }], id: 'sup', role: 'supervisor' },
+      { id: 'council-wrapper', members: [{ id: 'member-1' }], role: 'agentCouncil' },
+      { id: 'tasks-wrapper', role: 'tasks', tasks: [{ id: 'task-1' }] },
+      { columns: [[{ id: 'col-1' }], [{ id: 'col-2' }]], id: 'cmp', role: 'compare' },
+    ] as unknown as UIChatMessage[];
+
+    const ids = collectPreservedMessageIds(messages);
+
+    for (const id of ['sup-child', 'member-1', 'task-1', 'col-1', 'col-2']) {
+      expect(ids.has(id)).toBe(true);
+    }
+  });
+
+  it('should recurse into an in-bubble council block', () => {
+    const folded = {
+      children: [{ council: [{ id: 'broadcast-member' }], id: 'council-msg-a1' }],
+      id: 'msg-a1',
+      role: 'assistantGroup',
+    } as unknown as UIChatMessage;
+
+    expect(collectPreservedMessageIds([folded]).has('broadcast-member')).toBe(true);
+  });
+
+  it('should tolerate missing ids and non-array children', () => {
+    const messages = [
+      { children: undefined, role: 'assistantGroup' },
+      { id: '', role: 'user' },
+      { id: 'real', role: 'user', tools: [{ id: 'call-x' }] },
+    ] as unknown as UIChatMessage[];
+
+    expect([...collectPreservedMessageIds(messages)]).toEqual(['real']);
   });
 });

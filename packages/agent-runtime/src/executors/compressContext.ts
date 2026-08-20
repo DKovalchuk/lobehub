@@ -7,7 +7,7 @@ import type {
   GeneralAgentCompressionResultPayload,
   InstructionExecutor,
 } from '../types';
-import { selectPreservedTail } from '../utils/preserveTail';
+import { collectPreservedMessageIds, selectPreservedTail } from '../utils/preserveTail';
 
 const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error && error.message) return error.message;
@@ -59,9 +59,10 @@ export const compressContext =
     // so a mid-loop compaction doesn't drop the tool results and edits the
     // model is actively working from.
     const preservedMessages = selectPreservedTail(messages, preserveTailTokens ?? 0);
-    const preservedMessageIds = new Set(
-      preservedMessages.map((message) => message.id).filter((id): id is string => Boolean(id)),
-    );
+    // Expands folded containers: on the server path a preserved tool round is
+    // one virtual `assistantGroup`, and its child rows must be protected from
+    // the raw-row filter below by their own ids, not the wrapper's.
+    const preservedMessageIds = collectPreservedMessageIds(preservedMessages);
     // `selectPreservedTail` always returns a suffix, so trimming by length is
     // the exact complement of the preserved slice.
     const messagesToCompress =

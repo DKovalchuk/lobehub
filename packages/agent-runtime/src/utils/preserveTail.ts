@@ -73,3 +73,55 @@ export function selectPreservedTail(messages: UIChatMessage[], maxTokens: number
 
   return tail.length > 0 ? tail : lastUserMessageOnly(messages);
 }
+
+/**
+ * Container roles whose real conversation rows are folded into a child array.
+ * `assistantGroup` / `supervisor` use `children`, `agentCouncil` uses `members`,
+ * `tasks` / `groupTasks` use `tasks`. `compare` nests one level deeper.
+ */
+const CONTAINER_CHILD_KEYS = ['children', 'members', 'tasks', 'council'] as const;
+
+const collectRowIds = (node: unknown, into: Set<string>): void => {
+  if (!node || typeof node !== 'object') return;
+  const record = node as Record<string, unknown>;
+
+  if (typeof record.id === 'string' && record.id) into.add(record.id);
+
+  // A folded tool entry carries the id of its own persisted `tool` row.
+  if (Array.isArray(record.tools)) {
+    for (const tool of record.tools) {
+      const resultId = (tool as { result_msg_id?: unknown })?.result_msg_id;
+      if (typeof resultId === 'string' && resultId) into.add(resultId);
+    }
+  }
+
+  for (const key of CONTAINER_CHILD_KEYS) {
+    const children = record[key];
+    if (Array.isArray(children)) for (const child of children) collectRowIds(child, into);
+  }
+
+  // `compare` holds Message[][]
+  if (Array.isArray(record.columns)) {
+    for (const column of record.columns) {
+      if (Array.isArray(column)) for (const entry of column) collectRowIds(entry, into);
+    }
+  }
+};
+
+/**
+ * Every persisted row id the preserved messages stand for.
+ *
+ * On the server path `state.messages` is a conversation-flow projection, so a
+ * whole tool chain arrives as one virtual `assistantGroup` whose `id` is just
+ * its *first* assistant — the child assistants and tool rows live in
+ * `children[]`. The compression executor filters raw DB rows, so taking only
+ * top-level `message.id` would leave every folded child unprotected and fold
+ * the exact tool round the tail preservation is meant to keep. Synthetic
+ * wrapper ids (`tasks`, `agentCouncil`, `council-*`) match no row and are
+ * harmless to include.
+ */
+export function collectPreservedMessageIds(messages: UIChatMessage[]): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) collectRowIds(message, ids);
+  return ids;
+}

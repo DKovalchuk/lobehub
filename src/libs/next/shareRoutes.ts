@@ -1,3 +1,4 @@
+const SHARE_AGENT_ROUTE = /^\/share\/a\/[^/]+\/?$/;
 const SHARE_TOPIC_ROUTE = /^\/share\/t\/[^/]+\/?$/;
 const SHARE_PAGE_ROUTE = /^\/share\/page\/[^/]+\/?$/;
 
@@ -7,5 +8,7 @@ const pathOnly = (pathname: string) => pathname.split(/[?#]/, 1)[0]!;
 export const isShareSpaRoute = (pathname: string): boolean => {
   const path = pathOnly(pathname);
 
-  return SHARE_TOPIC_ROUTE.test(path) || SHARE_PAGE_ROUTE.test(path);
+  return (
+    SHARE_AGENT_ROUTE.test(path) || SHARE_TOPIC_ROUTE.test(path) || SHARE_PAGE_ROUTE.test(path)
+  );
 };

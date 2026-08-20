@@ -25,6 +25,7 @@ import {
   type SubAgentResultPayload,
   type SubAgentsBatchResultPayload,
 } from '../types';
+import { getTailPreserveBudget } from '../utils/preserveTail';
 import { shouldCompress } from '../utils/tokenCounter';
 
 const TOOL_NOT_ALLOWED_CONTENT =
@@ -513,6 +514,7 @@ export class GeneralChatAgent implements Agent {
     // so they must not count against the compression budget either — otherwise
     // we'd burn an extra summarization pass on tool tokens that won't be sent.
     const compressionOptions = {
+      maxOutputToken: this.config.compressionConfig?.maxOutputToken,
       maxWindowToken: this.config.compressionConfig?.maxWindowToken,
       thresholdRatio: this.config.compressionConfig?.thresholdRatio,
       tools: state.forceFinish ? undefined : payloadWithAllowedToolNames.tools,
@@ -528,6 +530,7 @@ export class GeneralChatAgent implements Agent {
             currentTokenCount: compressionCheck.currentTokenCount,
             existingSummary: this.findExistingSummary(messages),
             messages,
+            preserveTailTokens: getTailPreserveBudget(compressionCheck.threshold),
           },
           type: 'compress_context',
         };
@@ -584,6 +587,7 @@ export class GeneralChatAgent implements Agent {
         // Mirror RuntimeExecutors.callLlm: force-finish steps ship without tools,
         // so they must not count against the compression budget here either.
         const compressionOptions = {
+          maxOutputToken: this.config.compressionConfig?.maxOutputToken,
           maxWindowToken: this.config.compressionConfig?.maxWindowToken,
           thresholdRatio: this.config.compressionConfig?.thresholdRatio,
           tools: state.forceFinish ? undefined : this.getTools(state),
@@ -593,12 +597,14 @@ export class GeneralChatAgent implements Agent {
           const compressionCheck = shouldCompress(state.messages, compressionOptions);
 
           if (compressionCheck.needsCompression) {
-            // Context exceeds threshold, compress ALL messages into a single summary
+            // Context exceeds threshold — summarize history, keeping the most
+            // recent messages verbatim beside the summary.
             return {
               payload: {
                 currentTokenCount: compressionCheck.currentTokenCount,
                 existingSummary: this.findExistingSummary(state.messages),
                 messages: state.messages,
+                preserveTailTokens: getTailPreserveBudget(compressionCheck.threshold),
               },
               type: 'compress_context',
             } as AgentInstructionCompressContext;

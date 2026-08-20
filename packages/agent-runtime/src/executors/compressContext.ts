@@ -7,6 +7,7 @@ import type {
   GeneralAgentCompressionResultPayload,
   InstructionExecutor,
 } from '../types';
+import { selectPreservedTail } from '../utils/preserveTail';
 
 const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error && error.message) return error.message;
@@ -42,7 +43,7 @@ export const compressContext =
   (host: AgentRuntimeHost): InstructionExecutor =>
   async (instruction, state) => {
     const { payload } = instruction as Extract<AgentInstruction, { type: 'compress_context' }>;
-    const { messages, currentTokenCount, existingSummary } = payload;
+    const { messages, currentTokenCount, existingSummary, preserveTailTokens } = payload;
     const { operation, transports } = host;
     const { operationId, stepIndex, userId } = operation;
     const events: AgentEvent[] = [];
@@ -54,13 +55,19 @@ export const compressContext =
     const threadId = operation.threadId ?? state.metadata?.threadId;
     const compression = transports.compression;
     const llm = transports.llm;
-    const lastMessage = messages.at(-1);
-    const preservedMessages =
-      messages.length > 1 && lastMessage?.role === 'user' ? [lastMessage] : [];
+    // Keep the trailing slice of the conversation verbatim beside the summary,
+    // so a mid-loop compaction doesn't drop the tool results and edits the
+    // model is actively working from.
+    const preservedMessages = selectPreservedTail(messages, preserveTailTokens ?? 0);
     const preservedMessageIds = new Set(
       preservedMessages.map((message) => message.id).filter((id): id is string => Boolean(id)),
     );
-    const messagesToCompress = preservedMessages.length > 0 ? messages.slice(0, -1) : messages;
+    // `selectPreservedTail` always returns a suffix, so trimming by length is
+    // the exact complement of the preserved slice.
+    const messagesToCompress =
+      preservedMessages.length > 0
+        ? messages.slice(0, messages.length - preservedMessages.length)
+        : messages;
     const compressedMessagesFallback = [...messagesToCompress, ...preservedMessages];
 
     const createNextContext = ({

@@ -62,10 +62,14 @@ const createState = (overrides?: Partial<AgentState>): AgentState => ({
   ...overrides,
 });
 
-const createInstruction = (messages: any[]): AgentInstructionCompressContext => ({
+const createInstruction = (
+  messages: any[],
+  preserveTailTokens?: number,
+): AgentInstructionCompressContext => ({
   payload: {
     currentTokenCount: 5000,
     messages,
+    preserveTailTokens,
   },
   type: 'compress_context',
 });
@@ -235,6 +239,45 @@ describe('compressContext executor', () => {
         type: 'afterCompact',
       }),
     );
+  });
+
+  // Compressing mid-loop used to keep only a trailing user message, so an agent
+  // that compacted between tool calls lost the results it was working from and
+  // went back to re-reading the same files. With a tail budget the whole
+  // trailing round stays verbatim beside the summary.
+  it('keeps a whole trailing tool round out of the compressed group', async () => {
+    const tail = [
+      { content: 'read the config', id: 'msg-a1', role: 'assistant' },
+      { content: 'file contents', id: 'msg-t1', role: 'tool', tool_call_id: 'call-1' },
+      { content: 'now editing', id: 'msg-a2', role: 'assistant' },
+    ];
+    const history = [{ content: 'history', id: 'msg-history', role: 'user' }];
+
+    messagesQuery.mockResolvedValue([...history, ...tail]);
+    compressionCreateGroup.mockResolvedValue({
+      messageGroupId: 'group-123',
+      messagesToSummarize: history,
+    });
+    llmStream.mockResolvedValue({ content: 'summary' });
+    compressionFinalizeGroup.mockResolvedValue({
+      messages: [{ content: 'summary', id: 'group-123', role: 'compressedGroup' }],
+    });
+
+    const state = createState({ messages: [...history, ...tail] as any });
+    const result = await compressContext(host)(createInstruction(state.messages, 8_000), state);
+
+    // Only the pre-tail history is folded into the group.
+    expect(compressionCreateGroup).toHaveBeenCalledWith(
+      expect.objectContaining({ messageIds: ['msg-history'] }),
+    );
+    expect(compressionBuildPrompt).toHaveBeenCalledWith({
+      existingSummary: undefined,
+      messages: history,
+    });
+    expect((result.nextContext?.payload as any).compressedMessages).toEqual([
+      { content: 'summary', id: 'group-123', role: 'compressedGroup' },
+      ...tail,
+    ]);
   });
 
   it('skips without compression side effects when topic context is missing', async () => {

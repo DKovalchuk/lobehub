@@ -237,17 +237,24 @@ export const compressContext =
         compressionResult.messagesToSummarize;
       const compressedMessages = [...compressedMessagesBase];
 
+      // Persisted rows already represented in the compressed list. Compared on
+      // expanded ids because a container's synthetic wrapper id (`tasks-*`,
+      // `agentCouncil-*`, `compare-*`) matches no row: a top-level id check
+      // would re-append the wrapper on top of the raw children the DB just
+      // returned, and the next LLM call would see that task / council output
+      // twice. An `assistantGroup` dedupes either way — its id is its first
+      // assistant's — so this keeps every container on the same rule.
+      const presentRowIds = collectPreservedMessageIds(compressedMessages);
+
       for (const preservedMessage of preservedMessages) {
-        if (
-          !compressedMessages.some(
-            (message) =>
-              message === preservedMessage ||
-              (Boolean(message.id) &&
-                Boolean(preservedMessage.id) &&
-                message.id === preservedMessage.id),
-          )
-        ) {
+        const rowIds = collectPreservedMessageIds([preservedMessage]);
+        const alreadyPresent =
+          compressedMessages.includes(preservedMessage) ||
+          [...rowIds].some((id) => presentRowIds.has(id));
+
+        if (!alreadyPresent) {
           compressedMessages.push(preservedMessage);
+          for (const id of rowIds) presentRowIds.add(id);
         }
       }
 

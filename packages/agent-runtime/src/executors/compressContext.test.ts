@@ -333,6 +333,51 @@ describe('compressContext executor', () => {
     expect(compressed.map((m: any) => m.id)).toEqual(['group-123', 'msg-a1', 'msg-t1', 'msg-a2']);
   });
 
+  // `tasks` / `agentCouncil` / `compare` wrappers carry a SYNTHETIC id
+  // (`tasks-<parent>-<childIds>`) that matches no persisted row, so a
+  // top-level id check re-appends the wrapper on top of the raw child rows the
+  // DB already returned and the next LLM call sees the task output twice.
+  it('does not re-append a synthetic container wrapper over its raw children', async () => {
+    const tasksWrapper = {
+      content: '',
+      id: 'tasks-msg-parent-msg-task1,msg-task2',
+      role: 'tasks',
+      tasks: [
+        { content: 'task one', id: 'msg-task1', role: 'task' },
+        { content: 'task two', id: 'msg-task2', role: 'task' },
+      ],
+    };
+    const rawRows = [
+      { content: 'history', id: 'msg-history', role: 'user' },
+      { content: 'task one', id: 'msg-task1', role: 'task' },
+      { content: 'task two', id: 'msg-task2', role: 'task' },
+    ];
+
+    messagesQuery.mockResolvedValue(rawRows);
+    compressionCreateGroup.mockResolvedValue({
+      messageGroupId: 'group-123',
+      messagesToSummarize: [rawRows[0]],
+    });
+    llmStream.mockResolvedValue({ content: 'summary' });
+    compressionFinalizeGroup.mockResolvedValue({
+      messages: [
+        { content: 'summary', id: 'group-123', role: 'compressedGroup' },
+        ...rawRows.slice(1),
+      ],
+    });
+
+    const state = createState({
+      messages: [{ content: 'history', id: 'msg-history', role: 'user' }, tasksWrapper] as any,
+    });
+    const result = await compressContext(host)(createInstruction(state.messages, 8_000), state);
+
+    const compressed = (result.nextContext?.payload as any).compressedMessages;
+
+    // The children survive exactly once, as raw rows — no duplicated wrapper.
+    expect(compressed.map((m: any) => m.id)).toEqual(['group-123', 'msg-task1', 'msg-task2']);
+    expect(compressed.some((m: any) => m.role === 'tasks')).toBe(false);
+  });
+
   it('skips without compression side effects when topic context is missing', async () => {
     const state = createState({
       metadata: { agentId: 'agent-123' },

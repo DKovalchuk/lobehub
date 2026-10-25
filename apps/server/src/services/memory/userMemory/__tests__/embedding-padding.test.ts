@@ -172,5 +172,23 @@ describe('embedUserMemoryTexts - dimension handling', () => {
       expect(result[0]!.length).toBe(1024);
       expect(result[1]!.length).toBe(1024);
     });
+
+    it('should preserve a missing output when the provider returns an empty vector', async () => {
+      // A degraded provider response must not become a fabricated all-zero
+      // vector (unsearchable under vector_cosine_ops) — the slot stays missing.
+      const runtime = {
+        embeddings: vi.fn(async () => [[]]),
+      } satisfies UserMemoryEmbeddingRuntime;
+
+      const result = await embedUserMemoryTexts({
+        input: ['test input'],
+        model: 'nomic-embed-text',
+        runtime,
+        source: 'test:source',
+        userId: 'user-test',
+      });
+
+      expect(result[0]).toBeUndefined();
+    });
   });
 });

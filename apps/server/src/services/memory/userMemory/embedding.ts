@@ -127,7 +127,10 @@ export const embedUserMemoryTexts = async (
 
   for (const [requestIndex, embeddingVector] of (embeddings ?? []).entries()) {
     const request = requests[requestIndex];
-    if (!request || !embeddingVector) continue;
+    // An empty vector from a degraded provider response stays missing (undefined)
+    // instead of being fabricated into an all-zero vector, which would be silently
+    // unsearchable under `vector_cosine_ops`.
+    if (!request || !embeddingVector || embeddingVector.length === 0) continue;
 
     // Pad or truncate vector to target dimension
     outputs[request.index] = padVector(embeddingVector, targetDim);

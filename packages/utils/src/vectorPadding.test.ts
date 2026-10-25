@@ -22,23 +22,16 @@ describe('VectorPaddingService', () => {
       expect(result).toEqual([0.1, 0.2, 0.3]);
     });
 
-    it('should pad empty vector to target dimension', () => {
-      const vector: number[] = [];
-      const result = padVector(vector, 1024);
-      expect(result.length).toBe(1024);
-      expect(result.every((v) => v === 0)).toBe(true);
+    it('should throw on empty vector instead of fabricating zeros', () => {
+      expect(() => padVector([], 1024)).toThrow(/empty or missing/i);
     });
 
-    it('should handle null vector', () => {
-      const result = padVector(null, 1024);
-      expect(result.length).toBe(1024);
-      expect(result.every((v) => v === 0)).toBe(true);
+    it('should throw on null vector instead of fabricating zeros', () => {
+      expect(() => padVector(null, 1024)).toThrow(/empty or missing/i);
     });
 
-    it('should handle undefined vector', () => {
-      const result = padVector(undefined, 1024);
-      expect(result.length).toBe(1024);
-      expect(result.every((v) => v === 0)).toBe(true);
+    it('should throw on undefined vector instead of fabricating zeros', () => {
+      expect(() => padVector(undefined, 1024)).toThrow(/empty or missing/i);
     });
 
     it('should pad 768-dim vector to 1024', () => {

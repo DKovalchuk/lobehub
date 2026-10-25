@@ -17,19 +17,23 @@
  * - If vector matches target: return as-is (zero allocation)
  * - If vector is larger than target: truncate (lossy, but necessary for larger dimensions)
  *
- * @param vector - The input vector (null/undefined treated as empty)
+ * @param vector - The input vector
  * @param targetDim - The target dimension (must be positive)
  * @returns A new vector of exactly targetDim length
- * @throws Error if targetDim is not positive
+ * @throws Error if targetDim is not positive, or if the vector is empty/null/undefined.
+ *   Empty embeddings are rejected instead of being synthesized as all-zero vectors:
+ *   with `vector_cosine_ops` a zero vector has no meaningful cosine similarity, so the
+ *   record would silently become unsearchable instead of surfacing the provider failure.
  */
 export function padVector(vector: number[] | null | undefined, targetDim: number): number[] {
   if (targetDim <= 0) {
     throw new Error(`Target dimension must be positive, got ${targetDim}`);
   }
 
-  // Handle null/undefined as empty vector
   if (!vector || vector.length === 0) {
-    return Array.from({ length: targetDim }, () => 0);
+    throw new Error(
+      `Empty or missing embedding vector cannot be padded to ${targetDim} dimensions`,
+    );
   }
 
   // Fast path: already correct dimension

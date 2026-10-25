@@ -1,115 +1,139 @@
-import { describe, expect, it } from 'vitest';
+import { ModelRuntime } from '@lobechat/model-runtime';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Test that verifies the padding behavior in extract service
-// This test documents the expected behavior after our changes
-describe('Memory extraction vector padding', () => {
-  describe('vector dimensions in extract service', () => {
-    it('should pad 768-dim vectors to 1024 before storage', () => {
-      // This test documents that vectors from Ollama (768-dim)
-      // should be padded to 1024 before being stored in the database
+import { UserMemoryModel } from '@/database/models/userMemory';
 
-      const ollamaVector = Array.from({ length: 768 }, (_, i) => i / 768);
-      const targetDim = 1024;
+import { generateEmbeddings } from '../extract/embeddings';
+import { listRelevantUserMemories } from '../extract/queries';
 
-      // Simulate padding
-      const padded =
-        ollamaVector.length < targetDim
-          ? [...ollamaVector, ...Array.from({ length: targetDim - ollamaVector.length }).fill(0)]
-          : ollamaVector;
+// Input trimming is incidental to the dimension-normalization regression these
+// tests guard; keep it deterministic instead of loading tokenizer models.
+vi.mock('@/utils/tokenizer/embedding', () => ({
+  resolveEmbeddingTokenLimit: () => undefined,
+  trimEmbeddingInput: async (text: string) => text,
+}));
 
-      expect(padded.length).toBe(1024);
-      expect(padded.slice(0, 768)).toEqual(ollamaVector);
-      expect(padded.slice(768).every((v) => v === 0)).toBe(true);
+vi.mock('@/server/services/ftsSearch', () => ({
+  createFtsSearchRepo: vi.fn().mockResolvedValue({}),
+}));
+
+vi.mock('@/server/services/ftsSearch/observability', () => ({
+  recordUserMemoryLexicalSearchDecision: vi.fn(),
+}));
+
+vi.mock('@/database/models/userMemory', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return { ...actual, UserMemoryModel: vi.fn() };
+});
+
+const vector768 = Array.from({ length: 768 }, (_, i) => i / 768);
+
+const createRuntimeReturning = (vectors: number[][]) =>
+  new ModelRuntime({ embeddings: vi.fn(async () => vectors) } as any);
+
+/**
+ * Regression coverage for the dimension-mismatch paths called out in review:
+ * these exercise the real extraction entry points end-to-end through
+ * `ModelRuntime.embeddings`, which normalizes provider-native vectors to the
+ * requested `payload.dimensions` (the pgvector column width) at the shared
+ * boundary.
+ */
+describe('memory extraction embedding dimension regression', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  describe('generateEmbeddings (extraction persistence path)', () => {
+    it('pads provider-native 768-dim vectors to the 1024-dim memory schema width', async () => {
+      const runtime = createRuntimeReturning([vector768]);
+
+      const result = await generateEmbeddings(runtime as any, 'nomic-embed-text', ['hello'], 'u1');
+
+      expect(result[0]).toHaveLength(1024);
+      expect(result[0]!.slice(0, 768)).toEqual(vector768);
+      expect(result[0]!.slice(768).every((v) => v === 0)).toBe(true);
     });
 
-    it('should not pad vectors already at 1024', () => {
-      // OpenAI text-embedding-3-small with Matryoshka returns 1024-dim vectors
-      const openaiVector = Array.from({ length: 1024 }, (_, i) => i / 1024);
-      const targetDim = 1024;
+    it('truncates provider-native 1536-dim vectors to the requested width', async () => {
+      const vector1536 = Array.from({ length: 1536 }, (_, i) => i / 1536);
+      const runtime = createRuntimeReturning([vector1536]);
 
-      // Simulate padding (should be no-op)
-      const padded =
-        openaiVector.length === targetDim
-          ? openaiVector
-          : [...openaiVector, ...Array.from({ length: targetDim - openaiVector.length }).fill(0)];
+      const result = await generateEmbeddings(
+        runtime as any,
+        'text-embedding-ada-002',
+        ['hello'],
+        'u1',
+      );
 
-      expect(padded.length).toBe(1024);
-      expect(padded).toEqual(openaiVector);
+      expect(result[0]).toHaveLength(1024);
+      expect(result[0]).toEqual(vector1536.slice(0, 1024));
     });
 
-    it('should truncate vectors larger than 1024', () => {
-      // Models without Matryoshka support might return larger vectors
-      const largeVector = Array.from({ length: 1536 }, (_, i) => i / 1536);
-      const targetDim = 1024;
+    it('keeps the slot missing when the provider returns an empty vector', async () => {
+      const runtime = createRuntimeReturning([[]]);
 
-      // Simulate truncation
-      const truncated =
-        largeVector.length > targetDim ? largeVector.slice(0, targetDim) : largeVector;
+      const result = await generateEmbeddings(runtime as any, 'nomic-embed-text', ['hello'], 'u1');
 
-      expect(truncated.length).toBe(1024);
-      expect(truncated).toEqual(largeVector.slice(0, 1024));
+      expect(result[0]).toBeNull();
+      expect(console.error).toHaveBeenCalled();
     });
   });
 
-  describe('multiple vector fields', () => {
-    it('should pad all vector fields in user_memories', () => {
-      const vector768 = Array.from({ length: 768 }, (_, i) => i / 768);
-      const targetDim = 1024;
+  describe('listRelevantUserMemories (extraction search path)', () => {
+    it('passes a normalized 1024-dim query vector to hybrid search', async () => {
+      const searchMemory = vi.fn().mockResolvedValue({
+        activities: [],
+        contexts: [],
+        experiences: [],
+        identities: [],
+        meta: {},
+        preferences: [],
+      });
+      vi.mocked(UserMemoryModel).mockImplementation(function () {
+        return { searchMemory } as any;
+      } as any);
 
-      // Simulate padding for multiple fields
-      const summaryVector =
-        vector768.length < targetDim
-          ? [...vector768, ...Array.from({ length: targetDim - vector768.length }).fill(0)]
-          : vector768;
-      const detailsVector =
-        vector768.length < targetDim
-          ? [...vector768, ...Array.from({ length: targetDim - vector768.length }).fill(0)]
-          : vector768;
+      const runtime = createRuntimeReturning([vector768]);
 
-      expect(summaryVector.length).toBe(1024);
-      expect(detailsVector.length).toBe(1024);
+      await listRelevantUserMemories(
+        { db: Promise.resolve({}) } as any,
+        {} as any,
+        runtime as any,
+        'nomic-embed-text',
+        'u1',
+        [{ content: 'hello world', role: 'user' }] as any,
+      );
+
+      expect(searchMemory).toHaveBeenCalledTimes(1);
+      const queryVectors = searchMemory.mock.calls[0]![1] as number[][];
+      expect(queryVectors[0]).toHaveLength(1024);
+      expect(queryVectors[0]!.slice(0, 768)).toEqual(vector768);
     });
 
-    it('should pad all vector fields in user_memories_experiences', () => {
-      const vector768 = Array.from({ length: 768 }, (_, i) => i / 768);
-      const targetDim = 1024;
+    it('surfaces the provider failure when the query embedding comes back empty', async () => {
+      const searchMemory = vi.fn();
+      vi.mocked(UserMemoryModel).mockImplementation(function () {
+        return { searchMemory } as any;
+      } as any);
 
-      // Simulate padding for experience vector fields
-      const situationVector =
-        vector768.length < targetDim
-          ? [...vector768, ...Array.from({ length: targetDim - vector768.length }).fill(0)]
-          : vector768;
-      const actionVector =
-        vector768.length < targetDim
-          ? [...vector768, ...Array.from({ length: targetDim - vector768.length }).fill(0)]
-          : vector768;
-      const keyLearningVector =
-        vector768.length < targetDim
-          ? [...vector768, ...Array.from({ length: targetDim - vector768.length }).fill(0)]
-          : vector768;
+      const runtime = createRuntimeReturning([[]]);
 
-      expect(situationVector.length).toBe(1024);
-      expect(actionVector.length).toBe(1024);
-      expect(keyLearningVector.length).toBe(1024);
-    });
-  });
+      // An empty query vector must fail loudly (retryable) instead of silently
+      // retrieving with a fabricated or missing vector.
+      await expect(
+        listRelevantUserMemories(
+          { db: Promise.resolve({}) } as any,
+          {} as any,
+          runtime as any,
+          'nomic-embed-text',
+          'u1',
+          [{ content: 'hello world', role: 'user' }] as any,
+        ),
+      ).rejects.toThrow(/empty or missing/i);
 
-  describe('database storage', () => {
-    it('should store padded vectors in 1024-dim columns', () => {
-      // This test documents that the database columns are 1024-dim
-      // and padded vectors should fit correctly
-
-      const vector768 = Array.from({ length: 768 }, (_, i) => i / 768);
-      const targetDim = 1024;
-
-      const padded =
-        vector768.length < targetDim
-          ? [...vector768, ...Array.from({ length: targetDim - vector768.length }).fill(0)]
-          : vector768;
-
-      // Verify the vector fits in the column
-      expect(padded.length).toBe(1024);
-      expect(padded.every((v) => typeof v === 'number')).toBe(true);
+      expect(searchMemory).not.toHaveBeenCalled();
     });
   });
 });
